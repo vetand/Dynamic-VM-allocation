@@ -1,0 +1,62 @@
+{
+    "number of PMs": 3,
+    "PM": {
+        "CPU": 5000,
+        "RAM sockets": 2,
+        "RAM size": 8192,
+        "bandwidth": 10000
+    },
+    "number of events": 5,
+    "events": [
+        {
+            "time": 6,
+            "type": "add",
+            "VM": {
+                "id": 0,
+                "CPU": 656,
+                "RAM": 5024,
+                "bandwidth": 500
+            }
+        },
+        {
+            "time": 16,
+            "type": "add",
+            "VM": {
+                "id": 1,
+                "CPU": 1806,
+                "RAM": 3608,
+                "bandwidth": 500
+            }
+        },
+        {
+            "time": 23,
+            "type": "add",
+            "VM": {
+                "id": 2,
+                "CPU": 567,
+                "RAM": 4928,
+                "bandwidth": 500
+            }
+        },
+        {
+            "time": 25,
+            "type": "add",
+            "VM": {
+                "id": 3,
+                "CPU": 402,
+                "RAM": 3661,
+                "bandwidth": 500
+            }
+        },
+        {
+            "time": 34,
+            "type": "add",
+            "VM": {
+                "id": 4,
+                "CPU": 437,
+                "RAM": 4085,
+                "bandwidth": 500
+            }
+        }
+    ]
+}
