@@ -1,12 +1,20 @@
 {
+<<<<<<< HEAD
     "number of PMs": 1000,
+=======
+    "number of PMs": 3,
+>>>>>>> ab27ee35c1354008206afedb3b2ce4fb4b3d4ff6
     "PM": {
         "CPU": 5000,
         "RAM sockets": 2,
         "RAM size": 8192,
         "bandwidth": 10000
     },
+<<<<<<< HEAD
     "number of events": 2000,
+=======
+    "number of events": 5,
+>>>>>>> ab27ee35c1354008206afedb3b2ce4fb4b3d4ff6
     "events": [
         {
             "time": 6,
@@ -57,6 +65,7 @@
                 "RAM": 4085,
                 "bandwidth": 500
             }
+<<<<<<< HEAD
         },
         {
             "time": 38,
@@ -20010,3 +20019,8 @@
         }
     ]
 }
+=======
+        }
+    ]
+}
+>>>>>>> ab27ee35c1354008206afedb3b2ce4fb4b3d4ff6
