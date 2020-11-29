@@ -2,6 +2,9 @@ import json
 import copy
 import sys
 import timeit
+import math
+import random
+random.seed(47)
 
 EPS = 0.00001
 SLEEP_MODE_ENERGY = 0.1
@@ -84,7 +87,7 @@ def first_fit(datacentre, host, socket, sockets, vm):
     return -1, -1
 
 def best_fit(datacentre, host, socket, sockets, vm):
-    best_cpu_util = 0.0
+    best_cpu_util = 0.0 - EPS
     best_host = -1
     best_socket = -1
     for host in range(len(datacentre.hosts)):
@@ -94,10 +97,39 @@ def best_fit(datacentre, host, socket, sockets, vm):
                 full_cpu = datacentre.hosts[host].cpu
                 available_ram = datacentre.hosts[host].ram_available[socket] - vm.ram
                 full_ram = datacentre.hosts[host].ram_size
+                available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
+                full_bw = datacentre.hosts[host].bandwidth
                 new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
-                            ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+                            ((full_ram - available_ram) / full_ram) ** 2 +
+                            ((full_bw - available_bw) / full_bw) ** 2) ** 0.5
                 if best_cpu_util < new_util:
                     best_cpu_util = new_util
+                    best_host = host
+                    best_socket = socket
+    return best_host, best_socket
+
+# http://zhenxiao.com/papers/tpds2012.pdf
+def min_skewness(datacentre, host, socket, sockets, vm):
+    best_skew = 2 + EPS
+    best_host = -1
+    best_socket = -1
+    for host in range(len(datacentre.hosts)):
+        for socket in range(len(datacentre.hosts[0].ram_available)):
+            if datacentre.can_add(vm, host, socket):
+                available_cpu = datacentre.hosts[host].cpu_available - vm.cpu
+                full_cpu = datacentre.hosts[host].cpu
+                available_ram = datacentre.hosts[host].ram_available[socket] - vm.ram
+                full_ram = datacentre.hosts[host].ram_size
+                available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
+                full_bw = datacentre.hosts[host].bandwidth
+                average_util = (((full_cpu - available_cpu) / full_cpu) + 
+                               ((full_ram - available_ram) / full_ram) +
+                               ((full_bw - available_bw) / full_bw)) / 3
+                new_skew = ((((full_cpu - available_cpu) / full_cpu) / average_util - 1) ** 2 + \
+                            (((full_ram - available_ram) / full_ram) / average_util - 1) ** 2 + \
+                            (((full_bw - available_bw) / full_bw) / average_util - 1) ** 2) ** 0.5
+                if best_skew > new_skew:
+                    best_skew = new_skew
                     best_host = host
                     best_socket = socket
     return best_host, best_socket
@@ -117,6 +149,63 @@ def worst_fit(datacentre, host, socket, sockets, vm):
                     best_host = host
                     best_socket = socket
     return best_host, best_socket
+
+# http://ilanrcohen.droppages.com/pdfs/FracOnVBinPack.pdf
+def f_res(x, y, z):
+    return (max(max(abs(x - y), abs(x - z)), abs(y - z)) < 0.4)
+
+def first_fit_f_res(datacentre, host, socket, sockets, vm):
+    for host in range(len(datacentre.hosts)):
+        for socket in range(len(datacentre.hosts[0].ram_available)):
+            cpu = (datacentre.hosts[host].cpu - datacentre.hosts[host].cpu_available + vm.cpu) \
+                                                                    / datacentre.hosts[host].cpu
+            ram = (datacentre.hosts[host].ram_size - sum(datacentre.hosts[host].ram_available) \
+                                                     + vm.ram) / datacentre.hosts[host].ram_size
+            bw = (datacentre.hosts[host].bandwidth - datacentre.hosts[host].bw_available + vm.bandwidth) \
+                                                                       / datacentre.hosts[host].bandwidth
+            if f_res(cpu, ram, bw):
+                if datacentre.can_add(vm, host, socket):
+                     return host, socket
+    return first_fit(datacentre, host, socket, sockets, vm)
+
+# http://ilanrcohen.droppages.com/pdfs/FracOnVBinPack.pdf
+class RandomizedSlidingWindowAssignment:
+    def __init__(self, dim_number = 2):
+        self.allocated = [0] * dim_number
+        self.factor = 0.69 # = 1 / (1 + eps)
+        
+    def _update(self, host, vm):
+        self.allocated[0] += (vm.cpu / host.cpu) * self.factor
+        self.allocated[1] += (vm.ram / (host.ram_size * host.ram_sockets)) * self.factor
+
+    def fit(self, datacentre, host, socket, sockets, vm):
+        probs = [0.0] * len(datacentre.hosts)
+        if max(self.allocated) == 0:
+            probs[0] = 1.0
+            answers = [i for i in range(len(datacentre.hosts))]
+            bucket = random.choices(answers, weights = probs)[0]
+            if not datacentre.can_add(vm, bucket, 0):
+                host, socket = first_fit(datacentre, host, socket, sockets, vm)
+            else:
+                host, socket = bucket, 0
+            self._update(datacentre.hosts[host], vm)
+            return host, socket
+        min_index = math.ceil(max(self.allocated))
+        max_index = math.floor(math.ceil(max(self.allocated)) * math.e)
+        for j in range(min_index, max_index + 1):
+            probs[j] = math.log((j + 1) / j)
+        max_index = math.ceil(math.ceil(max(self.allocated)) * math.e)
+        probs[max_index] = math.log(math.ceil(math.ceil(max(self.allocated)) * math.e) / max_index)
+        answers = [i for i in range(len(datacentre.hosts))]
+        bucket = random.choices(answers, weights = probs)[0]
+        while datacentre.hosts[bucket - 1].cpu_utilization == 0:
+            bucket -= 1
+        if not datacentre.can_add(vm, bucket, 0):
+            host, socket = first_fit(datacentre, host, socket, sockets, vm)
+        else:
+            host, socket = bucket, 0
+        self._update(datacentre.hosts[host], vm)
+        return host, socket
 
 class Datacentre:
     def __init__(self, host_type, num_hosts):
@@ -178,6 +267,16 @@ class Datacentre:
         total = self.hosts[0].ram_size * len(self.hosts[0].ram_available) * cnt
         return (total - free) / total
 
+    def total_bandwidth_util(self):
+        free = 0
+        cnt = 0
+        for host in self.hosts:
+            if host.cpu_utilization > EPS:
+                cnt += 1
+                free += host.bw_available
+        total = self.hosts[0].bandwidth * cnt
+        return (total - free) / total
+
     def total_active(self):
         free = 0
         cnt = 0
@@ -232,19 +331,29 @@ class Simulation:
                 if self.logs:
                     print("Time = {}, new event: remove VM with id = {} from PM #{}, new CPU utulization = {}" \
                         .format(time, id, host, self.datacentre.hosts[host].cpu_utilization))
+        answer_data = {}
+        answer_data['active hosts'] = self.datacentre.total_active()
+        answer_data['total energy'] = self.datacentre.cum_energy
+        with open('output.json', 'w') as outfile:
+            json.dump(answer_data, outfile)
         print("Total time: {}s".format(round(timeit.default_timer() - start_time, 3)))
         print("Total cumulative energy: {}".format(format_e(round(self.datacentre.cum_energy, 2))))
         print("Total hosts active: {}".format(self.datacentre.total_active()))
         print("Total VMs allocated: {}".format(self.vms_allocated))
         print("CPU global utilization: {}".format(round(self.datacentre.total_cpu_util(), 5)))
         print("RAM global utilization: {}".format(round(self.datacentre.total_ram_util(), 5)))
+        print("bandwidth global utilization: {}".format(round(self.datacentre.total_bandwidth_util(), 5)))
 
+RSWA_policy = RandomizedSlidingWindowAssignment(2)
 
 func_match = dict()
 func_match['next-fit'] = next_fit
 func_match['first-fit'] = first_fit
+func_match['first-fit-f-res'] = first_fit_f_res
 func_match['best-fit'] = best_fit
 func_match['worst-fit'] = worst_fit
+func_match['min-skew'] = min_skewness
+func_match['RSWA'] = RSWA_policy.fit
 
 if len(sys.argv) >= 3:
     sim = Simulation("input.json", func_match[sys.argv[1]], "fill", sys.argv[2])
