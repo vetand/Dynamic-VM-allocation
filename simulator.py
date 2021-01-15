@@ -7,9 +7,10 @@ import random
 random.seed(47)
 
 EPS = 0.00000001
-SLEEP_MODE_ENERGY = 0.1
+SLEEP_MODE_ENERGY = 0.0
 MIN_ENERGY_CONSUMPTION = 0.4
 MAX_ENERGY_CONSUMPTION = 1.0
+ADAPTIVE_BEST_FIT = True
 
 LOWER_THRESHOLD = 0.6
 
@@ -51,7 +52,7 @@ class Host:
         self.cpu_utilization = (self.cpu - self.cpu_available) / self.cpu
         prev_energy = self.energy
         self.energy = MIN_ENERGY_CONSUMPTION + \
-                     (MAX_ENERGY_CONSUMPTION - MIN_ENERGY_CONSUMPTION) * self.cpu_utilization
+                     (MAX_ENERGY_CONSUMPTION - MIN_ENERGY_CONSUMPTION) * (2 * self.cpu_utilization - self.cpu_utilization ** 1.4)
         return self.energy - prev_energy
 
     def remove_vm(self, id):
@@ -67,7 +68,7 @@ class Host:
                 else:
                     self.energy = MIN_ENERGY_CONSUMPTION + \
                                   (MAX_ENERGY_CONSUMPTION - MIN_ENERGY_CONSUMPTION) \
-                                  * self.cpu_utilization
+                                  * (2 * self.cpu_utilization - self.cpu_utilization ** 1.4)
                 self.vm_list.remove(vm)
                 return prev_energy - self.energy
         return 0
@@ -91,28 +92,6 @@ def first_fit(datacentre, host, socket, sockets, vm):
     return -1, -1
 
 def best_fit(datacentre, host, socket, sockets, vm):
-    best_cpu_util = 0.0 - EPS
-    best_host = -1
-    best_socket = -1
-    for host in range(len(datacentre.hosts)):
-        for socket in range(len(datacentre.hosts[0].ram_available)):
-            if datacentre.can_add(vm, host, socket):
-                available_cpu = datacentre.hosts[host].cpu_available - vm.cpu
-                full_cpu = datacentre.hosts[host].cpu
-                available_ram = datacentre.hosts[host].ram_available[socket] - vm.ram
-                full_ram = datacentre.hosts[host].ram_size
-                available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
-                full_bw = datacentre.hosts[host].bandwidth
-                new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
-                            ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
-                if best_cpu_util < new_util:
-                    best_cpu_util = new_util
-                    best_host = host
-                    best_socket = socket
-    return best_host, best_socket
-
-def min_add_time(datacentre, host, socket, sockets, vm):
-    best_add_time = 1 / EPS
     best_util = 0.0 - EPS
     best_host = -1
     best_socket = -1
@@ -127,6 +106,41 @@ def min_add_time(datacentre, host, socket, sockets, vm):
                 full_bw = datacentre.hosts[host].bandwidth
                 new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
                             ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+                if best_util < new_util:
+                    best_util = new_util
+                    best_host = host
+                    best_socket = socket
+    return best_host, best_socket
+
+def min_add_time_BF(datacentre, host, socket, sockets, vm):
+    best_add_time = 1 / EPS
+    best_util = 0.0 - EPS
+    best_host = -1
+    best_socket = -1
+    cpu_global = datacentre.total_cpu_util()
+    ram_global = datacentre.total_ram_util()
+    for host in range(len(datacentre.hosts)):
+        for socket in range(len(datacentre.hosts[0].ram_available)):
+            if datacentre.can_add(vm, host, socket):
+                available_cpu = datacentre.hosts[host].cpu_available - vm.cpu
+                full_cpu = datacentre.hosts[host].cpu
+                available_ram = datacentre.hosts[host].ram_available[socket] - vm.ram
+                full_ram = datacentre.hosts[host].ram_size
+                available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
+                full_bw = datacentre.hosts[host].bandwidth
+
+                if not ADAPTIVE_BEST_FIT:
+                    new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
+                                ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+                else:
+                    if cpu_global > ram_global + 0.1:
+                        new_util = (full_cpu - available_cpu) / full_cpu
+                    elif ram_global > cpu_global + 0.1:
+                        new_util = (full_ram - available_ram) / full_ram
+                    else:
+                        new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
+                                ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+
                 if len(datacentre.hosts[host].vm_list) == 0:
                     add_time = 1 / EPS - 1
                 else:
@@ -143,30 +157,102 @@ def min_add_time(datacentre, host, socket, sockets, vm):
                     best_add_time = add_time
     return best_host, best_socket
 
-def throw_worst(datacentre, host, socket, sockets, vm):
-    THRESHOLD = 0.90
-    best_add_time = 1 / EPS
+def min_add_time2(datacentre, host, socket, sockets, vm):
+    best_add_time = 1 / EPS + 1
     best_util = 0.0 - EPS
     best_host = -1
     best_socket = -1
-    current_load = 0
-    hosts_active = 0
-    time_ends = []
+    min_diff_time = 1 / EPS + 1
     for host in range(len(datacentre.hosts)):
-        if datacentre.hosts[host].cpu_utilization > EPS:
-            hosts_active += 1
-            current_load += datacentre.hosts[host].cpu_utilization
-    if current_load > 10 and current_load / hosts_active < THRESHOLD:
-        for host in range(len(datacentre.hosts)):
+        for socket in range(len(datacentre.hosts[0].ram_available)):
+            if datacentre.can_add(vm, host, socket):
+                available_cpu = datacentre.hosts[host].cpu_available - vm.cpu
+                full_cpu = datacentre.hosts[host].cpu
+                available_ram = datacentre.hosts[host].ram_available[socket] - vm.ram
+                full_ram = datacentre.hosts[host].ram_size
+                available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
+                full_bw = datacentre.hosts[host].bandwidth
+
+                new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
+                            ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+
+                if len(datacentre.hosts[host].vm_list) == 0:
+                    add_time = 1 / EPS - 1
+                    diff_time = 1 / EPS
+                else:
+                    add_time = max(0, vm.time_end - max([cvm.time_end for cvm in datacentre.hosts[host].vm_list]))
+                    diff_time = max(0, max([cvm.time_end for cvm in datacentre.hosts[host].vm_list]) - vm.time_end)
+                if add_time < best_add_time:
+                    best_util = new_util
+                    best_host = host
+                    best_socket = socket
+                    best_add_time = add_time
+                    min_diff_time = diff_time
+                elif add_time == 0 and best_add_time == 0:
+                    if min_diff_time > diff_time:
+                        best_util = new_util
+                        best_host = host
+                        best_socket = socket
+                        best_add_time = add_time
+                        min_diff_time = diff_time
+                elif add_time == best_add_time and best_util < new_util:
+                    best_util = new_util
+                    best_host = host
+                    best_socket = socket
+                    best_add_time = add_time
+                    min_diff_time = diff_time
+    return best_host, best_socket
+
+def min_add_time3(datacentre, host, socket, sockets, vm):
+    best_add_time = 1 / EPS + 1
+    best_util = 0.0 - EPS
+    best_host = -1
+    best_socket = -1
+    for host in range(len(datacentre.hosts)):
+        for socket in range(len(datacentre.hosts[0].ram_available)):
             if datacentre.hosts[host].cpu_utilization > EPS:
-                time_ends.append(max([cvm.time_end for cvm in datacentre.hosts[host].vm_list]))
-        time_ends.sort()
-        time_end_thr = time_ends[len(time_ends) * 4 // 5]
+                server_end_time = max([cvm.time_end for cvm in datacentre.hosts[host].vm_list])
+            else:
+                server_end_time = datacentre.current_time
+            if datacentre.hosts[host].cpu_utilization < EPS:
+                continue
+            if datacentre.can_add(vm, host, socket) and (vm.time_end - datacentre.current_time) * 3 // 2 > server_end_time - datacentre.current_time:
+                available_cpu = datacentre.hosts[host].cpu_available - vm.cpu
+                full_cpu = datacentre.hosts[host].cpu
+                available_ram = datacentre.hosts[host].ram_available[socket] - vm.ram
+                full_ram = datacentre.hosts[host].ram_size
+                available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
+                full_bw = datacentre.hosts[host].bandwidth
+
+                new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
+                            ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+
+                if len(datacentre.hosts[host].vm_list) == 0:
+                    add_time = 1 / EPS - 1
+                else:
+                    add_time = max(0, vm.time_end - max([cvm.time_end for cvm in datacentre.hosts[host].vm_list]))
+                if add_time < best_add_time:
+                    best_util = new_util
+                    best_host = host
+                    best_socket = socket
+                    best_add_time = add_time
+                elif add_time == best_add_time and best_util < new_util:
+                    best_util = new_util
+                    best_host = host
+                    best_socket = socket
+                    best_add_time = add_time
+    if best_host != -1:
+        return best_host, best_socket
+    else:
+        return min_add_time_BF(datacentre, host, socket, sockets, vm)
+
+def min_add_time_FF(datacentre, host, socket, sockets, vm):
+    best_add_time = 1 / EPS
+    best_util = 0.0 - EPS
+    best_host = -1
+    best_socket = -1
     for host in range(len(datacentre.hosts)):
         for socket in range(len(datacentre.hosts[0].ram_available)):
-            if len(time_ends) > 0 and datacentre.hosts[host].cpu_utilization > EPS and \
-               max([cvm.time_end for cvm in datacentre.hosts[host].vm_list]) > time_end_thr:
-               continue
             if datacentre.can_add(vm, host, socket):
                 available_cpu = datacentre.hosts[host].cpu_available - vm.cpu
                 full_cpu = datacentre.hosts[host].cpu
@@ -185,11 +271,21 @@ def throw_worst(datacentre, host, socket, sockets, vm):
                     best_host = host
                     best_socket = socket
                     best_add_time = add_time
-                elif add_time == best_add_time and best_util < new_util:
-                    best_util = new_util
-                    best_host = host
-                    best_socket = socket
-                    best_add_time = add_time
+    return best_host, best_socket
+
+def min_server_endtime(datacentre, host, socket, sockets, vm):
+    best_endtime = -1
+    best_host = -1
+    best_socket = -1
+    for host in range(len(datacentre.hosts)):
+        for socket in range(len(datacentre.hosts[0].ram_available)):
+            end_time = 0
+            for vm_ in datacentre.hosts[host].vm_list:
+                end_time = max(end_time, vm_.time_end)
+            if datacentre.can_add(vm, host, socket) and end_time > best_endtime:
+                best_endtime = end_time
+                best_host = host
+                best_socket = socket
     return best_host, best_socket
 
 def best_fit_cpu(datacentre, host, socket, sockets, vm):
@@ -319,6 +415,7 @@ class Datacentre:
         self.current_time = 0
         self.prev_host = 0
         self.prev_socket = 0
+        self.vm_count = 0
 
     def can_add(self, vm, host_id, socket):
         if self.hosts[host_id].cpu_available < vm.cpu:
@@ -336,18 +433,20 @@ class Datacentre:
             self.current_energy += added
             self.prev_host = host_id
             self.prev_socket = socket
+            self.vm_count += 1
 
     def remove_vm(self, vm_id):
         for host in range(len(self.hosts)):
             freed = self.hosts[host].remove_vm(vm_id)
             self.current_energy -= freed
             if freed > 0:
+                self.vm_count -= 1
                 return host
 
     def update_time(self, new_time):
         delta = new_time - self.current_time
-        if self.current_time >= 20000 and self.current_time <= 100000 and \
-                                  new_time >= 20000 and new_time <= 100000:
+        if self.current_time >= 15000 and self.current_time <= 75000 and \
+                                  new_time >= 15000 and new_time <= 75000:
             self.cum_energy += delta * self.current_energy
         self.current_time = new_time
 
@@ -394,6 +493,13 @@ class Datacentre:
                 cnt += 1
         return cnt
 
+    def ideal_result(self):
+        cnt = 0
+        for host in self.hosts:
+            if host.cpu_utilization > EPS:
+                cnt += 1
+        return int(cnt * max(self.total_cpu_util(), self.total_ram_util(), self.total_bandwidth_util())) + 1
+
 class Simulation:
     def __init__(self, file_name, pack_policy, mode = "fill", logs = "False"):
         self.data = json.load(open(file_name))
@@ -421,6 +527,8 @@ class Simulation:
             answer_data[-1]['active hosts'] = self.datacentre.total_active()
             answer_data[-1]['time'] = event['time']
             answer_data[-1]['cpu'] = self.datacentre.total_cpu_util()
+            answer_data[-1]['ram'] = self.datacentre.total_ram_util()
+            answer_data[-1]['ideal result'] = self.datacentre.ideal_result()
             answer_data[-1]['current energy'] = self.datacentre.current_energy
             if type == "add":
                 vm = self.extract_VM(event)
@@ -467,11 +575,16 @@ func_match['best-fit-cpu'] = best_fit_cpu
 func_match['worst-fit'] = worst_fit
 func_match['min-skew'] = min_skewness
 func_match['RSWA'] = RSWA_policy.fit
-func_match['min-add-time'] = min_add_time
-func_match['throw-worst'] = throw_worst
+func_match['min-add-time-bf'] = min_add_time_BF
+func_match['min-add-time-ff'] = min_add_time_FF
+func_match['min-add-time-2'] = min_add_time2
+func_match['min-add-time-3'] = min_add_time3
+func_match['min-server-endtime'] = min_server_endtime
 
 if len(sys.argv) >= 3:
     sim = Simulation("input.json", func_match[sys.argv[1]], "fill", sys.argv[2])
 else:
     sim = Simulation("input.json", func_match[sys.argv[1]], "fill", "nologs")
+
+ADAPTIVE_BEST_FIT = (sys.argv[2] == 'adaptive')
 sim.start_sim()
