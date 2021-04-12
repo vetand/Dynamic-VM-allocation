@@ -40,6 +40,7 @@ class Host:
 
         self.vm_list = []
         self.cpu_utilization = 0
+        self.ram_utilization = 0
         self.energy = SLEEP_MODE_ENERGY
 
     def add_vm(self, vm, socket):
@@ -50,6 +51,7 @@ class Host:
         self.bw_available -= vm.bandwidth
         self.ram_available[socket] -= vm.ram
         self.cpu_utilization = (self.cpu - self.cpu_available) / self.cpu
+        self.ram_utilization = (self.ram_size - self.ram_available[socket]) / self.ram_size
         prev_energy = self.energy
         self.energy = MIN_ENERGY_CONSUMPTION + \
                      (MAX_ENERGY_CONSUMPTION - MIN_ENERGY_CONSUMPTION) * (2 * self.cpu_utilization - self.cpu_utilization ** 1.4)
@@ -62,6 +64,7 @@ class Host:
                 self.bw_available += vm.bandwidth
                 self.ram_available[vm.socket] += vm.ram
                 self.cpu_utilization = (self.cpu - self.cpu_available) / self.cpu
+                self.ram_utilization = (self.ram_size - self.ram_available[0]) / self.ram_size
                 prev_energy = self.energy
                 if self.cpu_utilization < EPS:
                     self.energy = SLEEP_MODE_ENERGY
@@ -73,13 +76,21 @@ class Host:
                 return prev_energy - self.energy
         return 0
 
+    def get_cpu_util(self):
+        return self.cpu_utilization
+
 def next_fit(datacentre, host, socket, sockets, vm):
+    cycle = 0
     while True:
         if datacentre.can_add(vm, host, socket):
             return host, socket
         socket += 1
         if socket == sockets:
-            host += 1
+            host = (host + 1) % len(datacentre.hosts)
+            if cycle > 0:
+                return -1, -1
+            if host == 0:
+                cycle += 1
             socket = 0
         if host == len(datacentre.hosts):
             return -1, -1
@@ -416,6 +427,7 @@ class Datacentre:
         self.prev_host = 0
         self.prev_socket = 0
         self.vm_count = 0
+        self.prev_migration = 0
 
     def can_add(self, vm, host_id, socket):
         if self.hosts[host_id].cpu_available < vm.cpu:
@@ -443,10 +455,13 @@ class Datacentre:
                 self.vm_count -= 1
                 return host
 
+    def migrateVM(self, vm_id, host):
+        self.remove_vm(vm_id)
+        self.add_vm(vm_id, hostB)
+
     def update_time(self, new_time):
         delta = new_time - self.current_time
-        if self.current_time >= 15000 and self.current_time <= 75000 and \
-                                  new_time >= 15000 and new_time <= 75000:
+        if new_time >= 250000 and new_time <= 500000:
             self.cum_energy += delta * self.current_energy
         self.current_time = new_time
 
@@ -500,12 +515,52 @@ class Datacentre:
                 cnt += 1
         return int(cnt * max(self.total_cpu_util(), self.total_ram_util(), self.total_bandwidth_util())) + 1
 
+# select %percent% least loaded hosts and migrate all VMs from them
+def simple_migration_policy(datacentre, policy, rate = 40000, percent = 0.15):
+    if datacentre.current_time - datacentre.prev_migration < rate:
+        return
+    datacentre.prev_migration = datacentre.current_time
+    workloads = []
+    for hostID in range(len(datacentre.hosts)):
+        if datacentre.hosts[hostID].get_cpu_util() > EPS:
+            workloads.append(datacentre.hosts[hostID].get_cpu_util())
+    workloads.sort()
+    if len(workloads) == 0:
+        return
+    threshold = workloads[int(len(workloads) * percent)]
+    vm_migration_list = []
+    for hostID in range(len(datacentre.hosts)):
+        if datacentre.hosts[hostID].get_cpu_util() <= threshold:
+            for vm in datacentre.hosts[hostID].vm_list:
+                vm_migration_list.append(vm)
+                datacentre.remove_vm(vm.id)
+
+    def compare(vm):
+        return vm.cpu
+
+    vm_migration_list = sorted(vm_migration_list, key = compare, reverse = True)
+    for vm in vm_migration_list:
+        host, socket = policy(datacentre, datacentre.prev_host,
+                    datacentre.prev_socket,
+                    len(datacentre.hosts[0].ram_available), vm)
+        if host != -1:
+            datacentre.add_vm(vm, host, socket)
+        else:
+            print("Cannot reallocate some VM!!!")
+
 class Simulation:
-    def __init__(self, file_name, pack_policy, mode = "fill", logs = "False"):
+    def __init__(self, function_name,
+                       file_name,
+                       pack_policy,
+                       migration_policy,
+                       mode = "fill",
+                       logs = "False"):
+        self.function_name = function_name
         self.data = json.load(open(file_name))
         host = Host(self.data['PM']['CPU'], self.data['PM']['RAM sockets'], \
                     self.data['PM']['RAM size'], self.data['PM']['bandwidth'])
         self.datacentre = Datacentre(host, self.data['number of PMs'])
+        self.migration_policy = migration_policy
         self.pack_policy = pack_policy
         self.vms_allocated = 0
         self.mode = mode
@@ -519,8 +574,12 @@ class Simulation:
     def start_sim(self):
         start_time = timeit.default_timer()
         answer_data = []
+        count = 0
         for event in self.data['events']:
             time = event['time']
+            #if time == 20000:
+            #    for host in self.datacentre.hosts:
+            #        print(host.cpu_utilization, host.ram_utilization)
             self.datacentre.update_time(time)
             type = event['type']
             answer_data.append(dict())
@@ -530,6 +589,12 @@ class Simulation:
             answer_data[-1]['ram'] = self.datacentre.total_ram_util()
             answer_data[-1]['ideal result'] = self.datacentre.ideal_result()
             answer_data[-1]['current energy'] = self.datacentre.current_energy
+            count += 1
+            #if count % 1000 == 0:
+            #    print("Processed event #{}".format(count))
+
+            self.migration_policy(self.datacentre, self.pack_policy)
+
             if type == "add":
                 vm = self.extract_VM(event)
                 host, socket = self.pack_policy(self.datacentre, self.datacentre.prev_host,
@@ -556,6 +621,8 @@ class Simulation:
                         .format(time, id, host, self.datacentre.hosts[host].cpu_utilization))
         with open('output.json', 'w') as outfile:
             json.dump(answer_data, outfile)
+        
+        print(self.function_name, ":", sep = "")
         print("Total time: {}s".format(round(timeit.default_timer() - start_time, 3)))
         print("Total cumulative energy: {}".format(format_e(round(self.datacentre.cum_energy, 2))))
         print("Total hosts active: {}".format(self.datacentre.total_active()))
@@ -563,9 +630,13 @@ class Simulation:
         print("CPU global utilization: {}".format(round(self.datacentre.total_cpu_util(), 5)))
         print("RAM global utilization: {}".format(round(self.datacentre.total_ram_util(), 5)))
         print("bandwidth global utilization: {}".format(round(self.datacentre.total_bandwidth_util(), 5)))
+        print()
+        print()
+
+def EMPTY_FUNC(*args):
+    pass
 
 RSWA_policy = RandomizedSlidingWindowAssignment(2)
-
 func_match = dict()
 func_match['next-fit'] = next_fit
 func_match['first-fit'] = first_fit
@@ -581,10 +652,14 @@ func_match['min-add-time-2'] = min_add_time2
 func_match['min-add-time-3'] = min_add_time3
 func_match['min-server-endtime'] = min_server_endtime
 
-if len(sys.argv) >= 3:
-    sim = Simulation("input.json", func_match[sys.argv[1]], "fill", sys.argv[2])
-else:
-    sim = Simulation("input.json", func_match[sys.argv[1]], "fill", "nologs")
+func_match['no-migration'] = EMPTY_FUNC
+func_match['migration-simple'] = simple_migration_policy
 
-ADAPTIVE_BEST_FIT = (sys.argv[2] == 'adaptive')
+sim = Simulation(sys.argv[1] + ", " + sys.argv[2],
+                "input.json",
+                func_match[sys.argv[1]],
+                func_match[sys.argv[2]],
+                "no-fill",
+                "no-logs")
+ADAPTIVE_BEST_FIT = (sys.argv[3] == 'adaptive')
 sim.start_sim()
