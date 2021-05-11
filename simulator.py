@@ -106,6 +106,10 @@ def best_fit(datacentre, host, socket, sockets, vm):
     best_util = 0.0 - EPS
     best_host = -1
     best_socket = -1
+    
+    cpu_global = datacentre.total_cpu_util()
+    ram_global = datacentre.total_ram_util()
+
     for host in range(len(datacentre.hosts)):
         for socket in range(len(datacentre.hosts[0].ram_available)):
             if datacentre.can_add(vm, host, socket):
@@ -115,8 +119,19 @@ def best_fit(datacentre, host, socket, sockets, vm):
                 full_ram = datacentre.hosts[host].ram_size
                 available_bw = datacentre.hosts[host].bw_available - vm.bandwidth
                 full_bw = datacentre.hosts[host].bandwidth
-                new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
-                            ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+
+                if not ADAPTIVE_BEST_FIT:
+                    new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
+                                ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+                else:
+                    if cpu_global > ram_global + 0.2:
+                        new_util = (full_cpu - available_cpu) / full_cpu
+                    elif ram_global > cpu_global + 0.2:
+                        new_util = (full_ram - available_ram) / full_ram
+                    else:
+                        new_util = (((full_cpu - available_cpu) / full_cpu) ** 2 + 
+                                ((full_ram - available_ram) / full_ram) ** 2) ** 0.5
+                
                 if best_util < new_util:
                     best_util = new_util
                     best_host = host
@@ -461,7 +476,7 @@ class Datacentre:
 
     def update_time(self, new_time):
         delta = new_time - self.current_time
-        if new_time >= 250000 and new_time <= 500000:
+        if new_time >= LEFT_BOUND and new_time <= RIGHT_BOUND:
             self.cum_energy += delta * self.current_energy
         self.current_time = new_time
 
@@ -622,16 +637,24 @@ class Simulation:
         with open('output.json', 'w') as outfile:
             json.dump(answer_data, outfile)
         
-        print(self.function_name, ":", sep = "")
-        print("Total time: {}s".format(round(timeit.default_timer() - start_time, 3)))
-        print("Total cumulative energy: {}".format(format_e(round(self.datacentre.cum_energy, 2))))
-        print("Total hosts active: {}".format(self.datacentre.total_active()))
-        print("Total VMs allocated: {}".format(self.vms_allocated))
-        print("CPU global utilization: {}".format(round(self.datacentre.total_cpu_util(), 5)))
-        print("RAM global utilization: {}".format(round(self.datacentre.total_ram_util(), 5)))
-        print("bandwidth global utilization: {}".format(round(self.datacentre.total_bandwidth_util(), 5)))
-        print()
-        print()
+        #print(self.function_name, ":", sep = "")
+        #print("Total time: {}s".format(round(timeit.default_timer() - start_time, 3)))
+        #print("Total cumulative energy: {}".format(format_e(round(self.datacentre.cum_energy, 2))))
+        #print("Total hosts active: {}".format(self.datacentre.total_active()))
+        #print("Total VMs allocated: {}".format(self.vms_allocated))
+        #print("CPU global utilization: {}".format(round(self.datacentre.total_cpu_util(), 5)))
+        #print("RAM global utilization: {}".format(round(self.datacentre.total_ram_util(), 5)))
+        #print("bandwidth global utilization: {}".format(round(self.datacentre.total_bandwidth_util(), 5)))
+        #print()
+        #print()
+        print(self.function_name.split()[0][:-1:],
+            "&", 
+            round(self.datacentre.cum_energy / (1000*1000), 3),
+            "&",
+            round(timeit.default_timer() - start_time, 3),
+            "\\\\",
+            )
+        print("\hline")
 
 def EMPTY_FUNC(*args):
     pass
@@ -662,4 +685,6 @@ sim = Simulation(sys.argv[1] + ", " + sys.argv[2],
                 "no-fill",
                 "no-logs")
 ADAPTIVE_BEST_FIT = (sys.argv[3] == 'adaptive')
+LEFT_BOUND = int(sys.argv[4])
+RIGHT_BOUND = int(sys.argv[5])
 sim.start_sim()

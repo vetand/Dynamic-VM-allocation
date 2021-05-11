@@ -171,8 +171,8 @@ def full_poisson(PMs, sim_time, file_name):
 
     for i in range(sim_time):
         if i % 2000 == 0:
-            speed_rate_short = min(max(np.random.poisson(speed_rate_short), 1), 9)
-            speed_rate_long = min(max(np.random.poisson(speed_rate_long), 1), 4)
+            speed_rate_short = min(max(np.random.poisson(speed_rate_short), 3), 6)
+            speed_rate_long = min(max(np.random.poisson(speed_rate_long), 2), 3)
             for i in range(len(weights_short)):
                 weights_short[i] = max(np.random.poisson(weights_short[i]), 1)
             for i in range(len(weights_long)):
@@ -210,24 +210,31 @@ def full_poisson(PMs, sim_time, file_name):
         json.dump(node, file, indent = 4)
 
 # MODE 1 - workload decreases abruptly
-#simple(200, 40000, 'input.json', 1)
+if int(sys.argv[3]) == 1:
+    simple(200, 40000, 'input.json', 1)
 
 # MODE 2 - workload increases abruptly
-#simple(100, 40000, 'input.json', 2)
+if int(sys.argv[3]) == 2:
+    simple(100, 40000, 'input.json', 2)
 
 # MODE 3 - type distribution changes abruptly
-#simple(100, 40000, 'input.json', 3)
+if int(sys.argv[3]) == 3:
+    simple(100, 40000, 'input.json', 3)
 
 # MODE 4 - type distribution changes abruptly
-simple(100, 40000, 'input.json', 4)
+if int(sys.argv[3]) == 4:
+    simple(100, 40000, 'input.json', 4)
 
 # MODE 5 - absolutly constant distributions and speed rate
-#simple(100, 40000, 'input.json', 5) 
+if int(sys.argv[3]) == 5:
+    simple(100, 40000, 'input.json', 5) 
 
 # MODE 6 - day and night workload periodical cycle
-#day_night_scenario(90, 20000, 'input.json')
+if int(sys.argv[3]) == 6:
+    day_night_scenario(90, 20000, 'input.json')
 
 # MODE 7 - distribution and speed poisson process
-#full_poisson(170, 40000, 'input.json')
+if int(sys.argv[3]) == 7:
+    full_poisson(170, 100000, 'input.json')
 
 
