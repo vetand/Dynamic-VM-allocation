@@ -575,6 +575,7 @@ class Simulation:
         host = Host(self.data['PM']['CPU'], self.data['PM']['RAM sockets'], \
                     self.data['PM']['RAM size'], self.data['PM']['bandwidth'])
         self.datacentre = Datacentre(host, self.data['number of PMs'])
+        self.datacentreGR = Datacentre(host, self.data['number of PMs'])
         self.migration_policy = migration_policy
         self.pack_policy = pack_policy
         self.vms_allocated = 0
@@ -596,27 +597,41 @@ class Simulation:
             #    for host in self.datacentre.hosts:
             #        print(host.cpu_utilization, host.ram_utilization)
             self.datacentre.update_time(time)
+            self.datacentreGR.update_time(time)
             type = event['type']
             answer_data.append(dict())
-            answer_data[-1]['active hosts'] = self.datacentre.total_active()
+            answer_data[-1]['active hosts'] = self.datacentreGR.total_active()
             answer_data[-1]['time'] = event['time']
-            answer_data[-1]['cpu'] = self.datacentre.total_cpu_util()
-            answer_data[-1]['ram'] = self.datacentre.total_ram_util()
-            answer_data[-1]['ideal result'] = self.datacentre.ideal_result()
-            answer_data[-1]['current energy'] = self.datacentre.current_energy
+            answer_data[-1]['cpu'] = self.datacentreGR.total_cpu_util()
+            answer_data[-1]['ram'] = self.datacentreGR.total_ram_util()
+            answer_data[-1]['ideal result'] = self.datacentreGR.ideal_result()
+            answer_data[-1]['current energy'] = self.datacentreGR.current_energy
             count += 1
             #if count % 1000 == 0:
             #    print("Processed event #{}".format(count))
 
             self.migration_policy(self.datacentre, self.pack_policy)
+            self.migration_policy(self.datacentreGR, self.pack_policy)
 
             if type == "add":
                 vm = self.extract_VM(event)
-                host, socket = self.pack_policy(self.datacentre, self.datacentre.prev_host,
+                if event['time'] >= LEFT_BOUND:
+                    hostGR, socketGR = self.pack_policy(self.datacentreGR, self.datacentreGR.prev_host,
+                                                    self.datacentreGR.prev_socket,
+                                                    len(self.datacentreGR.hosts[0].ram_available), vm)
+                else:
+                    hostGR, socketGR = first_fit(self.datacentreGR, self.datacentreGR.prev_host,
+                                                    self.datacentreGR.prev_socket,
+                                                    len(self.datacentreGR.hosts[0].ram_available), vm)
+
+                host, socket = self.pack_policy(self.datacentre,
+                                                self.datacentre.prev_host,
                                                 self.datacentre.prev_socket,
                                                 len(self.datacentre.hosts[0].ram_available), vm)
+
                 if host != -1:
                     self.datacentre.add_vm(vm, host, socket)
+                    self.datacentreGR.add_vm(vm, hostGR, socketGR)
                     if self.logs:
                         print("Time = {}, new event: add VM with id = {} to PM #{}, new CPU utulization = {}" \
                            .format(time, vm.id, host, self.datacentre.hosts[host].cpu_utilization))
@@ -631,6 +646,7 @@ class Simulation:
             else:
                 id = event['VM']['id']
                 host = self.datacentre.remove_vm(id)
+                host = self.datacentreGR.remove_vm(id)
                 if self.logs:
                     print("Time = {}, new event: remove VM with id = {} from PM #{}, new CPU utulization = {}" \
                         .format(time, id, host, self.datacentre.hosts[host].cpu_utilization))
