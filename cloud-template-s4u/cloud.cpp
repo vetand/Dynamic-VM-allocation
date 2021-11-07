@@ -79,6 +79,7 @@ public:
     input >> root;
     input.close();
 
+    // Хочется добавить поддержку актуальных трейсов от Microsoft Azure, чтобы не генерировать свои
     const auto events = root["events"];
     for (const auto& event: events) {
       const auto type = event["type"].get<std::string>();
@@ -143,6 +144,48 @@ public:
     return NULL;
   }
 
+  simgrid::s4u::VirtualMachine* PackViaBestFit(const Event& event) {
+    const auto vm = event.vm_;
+    std::stringstream ss;
+    ss << vm.id_;
+    simgrid::s4u::this_actor::sleep_for(event.time_ - current_time_);
+    current_time_ = event.time_;
+
+    int best_host = -1;
+    double min_available;
+
+    for (int i = 0; i < NUMBER_OF_HOSTS; ++i) {
+      const auto host = GetHostByNumber(i);
+      double available = available_cpu_[i];
+      double demand = (double)vm.cpu_ / HOST_CPU_SIZE;
+      if (demand <= available + EPS) {
+        if (best_host == -1 || available < min_available) {
+          best_host = i;
+          min_available = available;
+        }
+      }
+    }
+
+    if (best_host != -1) {
+        const auto host = GetHostByNumber(best_host);
+        double available = available_cpu_[best_host];
+        double demand = (double)vm.cpu_ / HOST_CPU_SIZE;
+
+        const double computation_amount = (event.vm_.time_end_ - event.time_) * host->get_speed();
+        auto* vm = new simgrid::s4u::VirtualMachine(ss.str(), host, 1);
+        // Нельзя явно задавать лимиты на использование ресурсов, кроме памяти. CPU равномерно распределяется между VM на хосте
+        vm->set_ramsize(1e9); // 1Gbytes
+        vm->start();
+
+        simgrid::s4u::Actor::create(ss.str(), host, worker, computation_amount, false, 0);
+        // Хотелось бы вешать computation_amount прямо на VM или хост без посредника в виде actor-а
+        available_cpu_[best_host] -= demand;
+        return vm;
+    }
+
+    return NULL;
+  }
+
 private:
   std::vector<simgrid::s4u::Host*> hosts_;
   std::vector<Event> events_;
@@ -162,7 +205,8 @@ static void master_main()
       break;
     }
     if (event.type_ == "add") {
-      const auto vm = sim.PackViaFirstFit(event);
+      // const auto vm = sim.PackViaFirstFit(event);
+      const auto vm = sim.PackViaBestFit(event);
     }
   }
 }
@@ -184,5 +228,6 @@ int main(int argc, char* argv[])
 
   XBT_INFO("Bye (simulation time %g)", simgrid::s4u::Engine::get_clock());
 
+  // Почему-то нельзя получить финальную энергию по каждому хосту, всё выводится из коробки, очень неудобно
   return 0;
 }
